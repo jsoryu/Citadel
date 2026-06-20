@@ -173,12 +173,24 @@ public final class SSHClient {
         settings: SSHClientSettings
     ) async throws -> SSHClient {
         let inboundChannelHandler = SSHClientInboundChannelHandler()
-        try await SSHClientSession.addHandlers(
-            on: channel,
-            inboundChannelHandler: inboundChannelHandler,
-            settings: settings
-        ).get()
-        
+        // ─── TerminalKit patch [tk-niots-flatsubmit, base 0.12.1] ──────────────────────────────
+        // Wrap addHandlers in `channel.eventLoop.flatSubmit { … }` so it runs ON the channel's
+        // event loop. `connect(on:settings:)` is a nonisolated global `async` func; un-wrapped it
+        // calls `SSHClientSession.addHandlers` → `syncOperations.addHandlers` synchronously on the
+        // Swift-concurrency executor thread, OFF the channel's loop. On a NIOTS channel that trips
+        // `NIOTSEventLoop.preconditionInEventLoop` (`dispatchPrecondition(.onQueue(loop))`) → SIGTRAP
+        // in DEBUG builds. flatSubmit hops onto the loop first (the idiom Citadel already uses in
+        // TTY/Exec/SFTP). Necessary AND sufficient for connect/exec AND withPTY (M7.2c decision-4).
+        // Replay on a Citadel bump: re-apply this single wrap; see PATCH.md in the TerminalView repo.
+        try await channel.eventLoop.flatSubmit {
+            SSHClientSession.addHandlers(
+                on: channel,
+                inboundChannelHandler: inboundChannelHandler,
+                settings: settings
+            )
+        }.get()
+        // ─── end TerminalKit patch ─────────────────────────────────────────────────────────────
+
         let sshHandler = try await channel.pipeline.handler(type: NIOSSHHandler.self).get()
         let handshakeHandler = try await channel.pipeline.handler(type: ClientHandshakeHandler.self).get()
         let session = try await handshakeHandler.authenticated.map {
