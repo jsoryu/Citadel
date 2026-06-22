@@ -169,7 +169,16 @@ final class SSHClientSession: Sendable {
     ) -> EventLoopFuture<Void> {
         let handshakeHandler = ClientHandshakeHandler(
             eventLoop: channel.eventLoop,
-            loginTimeout: .seconds(10)
+            // ─── TerminalKit patch (tk.2) ───────────────────────────────────────────────
+            // Was hardcoded `.seconds(10)`, which fires MID-PROMPT during INTERACTIVE auth:
+            // a host-key trust prompt + credential entry routinely exceed 10 s, so the login
+            // deadline elapses and the handshake promise fails (`connectTimeout`) while the
+            // user is still typing. Read the existing, otherwise-unused
+            // `SSHClientSettings.connectTimeout` field instead, so an embedder doing
+            // human-in-the-loop auth can budget for it (TerminalKit sets 120 s). Non-interactive
+            // callers are unaffected: the field defaults to .seconds(30) (was effectively 10).
+            // ────────────────────────────────────────────────────────────────────────────
+            loginTimeout: settings.connectTimeout
         )
         var clientConfiguration = SSHClientConfiguration(
             userAuthDelegate: settings.authenticationMethod(),
